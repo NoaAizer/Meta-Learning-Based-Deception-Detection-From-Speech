@@ -45,7 +45,7 @@ TRAIN_EPOCHS = 1
 FT_EPOCHS = 50
 
 # If Wav2Vec 2.0 embedding, otherwise five-sound-features
-WAV2VEC = True
+WAV2VEC = False
 
 device = 'cuda' if cuda.is_available() else 'cpu'
 print(device)
@@ -311,22 +311,22 @@ def train_process(model, criterion, optimizer):
     return model
 
 
-def print_scores(test_label, test_preds):
+def print_scores(test_labels, test_preds):
     """
     Print all current scores, for current SEED and the mean of all previous ones.
-    :param test_label: labels of all query sets of test tasks
+    :param test_labels: labels of all query sets of test tasks
     :param test_preds: predicted labels of all query sets of test tasks
     :return:
     """
     # Print all tasks scores
-    accuracy_all_tasks = accuracy_score(test_label, test_preds)
-    precision_all_tasks = precision_score(test_label, test_preds)
-    recall_all_tasks = recall_score(test_label, test_preds)
-    f1_all_tasks = f1_score(test_label, test_preds)
+    accuracy_all_tasks = accuracy_score(test_labels, test_preds)
+    precision_all_tasks = precision_score(test_labels, test_preds)
+    recall_all_tasks = recall_score(test_labels, test_preds)
+    f1_all_tasks = f1_score(test_labels, test_preds)
 
     print(f" ############################## SEED {SEED} SCORES: ###############################")
 
-    print(confusion_matrix(test_label, test_preds))
+    print(confusion_matrix(test_labels, test_preds))
     print(f"Mean Accuracy: {accuracy_all_tasks}")
     print(f"Mean Precision: {precision_all_tasks}")
     print(f"Mean Recall: {recall_all_tasks}")
@@ -357,12 +357,7 @@ def eval_process(model):
         "############################################## TESTING TASKS #############################################\n"
         "##########################################################################################################")
 
-    # eval mode affects the behaviour of some layers (such as batch normalization or dropout)
-    # no_grad() tells torch not to keep in memory the whole computational graph (it's more lightweight this way)
-
-    test_acc = []
-    test_f1s = []
-    test_label = []
+    test_labels = []
     test_preds = []
 
     # For each test task:
@@ -408,17 +403,14 @@ def eval_process(model):
                 f"Accuracy: {accuracy_score(query_labels.tolist(), qr_preds)}\n"
                 f"F1-score:{f1_score(query_labels.tolist(), qr_preds)}\n")
             print(confusion_matrix(query_labels.tolist(), qr_preds))
-            test_label.extend(query_labels.tolist())
+            test_labels.extend(query_labels.tolist())
             test_preds.extend(qr_preds)
             try:
                 print(classification_report(query_labels.tolist(), qr_preds, target_names=['0', '1']))
-                test_acc.append((accuracy_score(query_labels.tolist(), qr_preds)))
-                test_f1s.append((f1_score(query_labels.tolist(), qr_preds)))
-
             except:
                 ""
 
-    print_scores(test_label, test_preds)
+    print_scores(test_labels, test_preds)
 
 
 def main():
