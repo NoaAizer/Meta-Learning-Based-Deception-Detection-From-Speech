@@ -41,11 +41,11 @@ test_path = root_path + "test_df.csv"
 
 # Define Batch-size and epochs
 TRAIN_BATCH_SIZE = 256
-TRAIN_EPOCHS = 5
+TRAIN_EPOCHS = 1
 FT_EPOCHS = 50
 
 # If Wav2Vec 2.0 embedding, otherwise five-sound-features
-WAV2VEC = False
+WAV2VEC = True
 
 device = 'cuda' if cuda.is_available() else 'cpu'
 print(device)
@@ -66,6 +66,7 @@ else:
 
 # Write results to file
 f = open(f"../outputs/output_prototypical_{file_suffix}.txt", 'w')
+
 sys.stdout = f
 
 all_labels = []
@@ -294,19 +295,19 @@ def train_process(model, criterion, optimizer):
                 query_vecs = torch.stack(features).to(device)
                 query_labels = torch.tensor([d for d in data['label']]).to(device)
 
-            # Fine-tune on train task
-            for j in range(FT_EPOCHS):
-                acc, loss_value = fit(model, criterion, optimizer, epoch, support_vecs, support_labels, query_vecs,
-                                      query_labels)
-                print(f"{j}: ACC: {acc}\tLOSS: {loss_value}")
-                if j == TRAIN_EPOCHS - 1:
-                    all_loss.append(loss_value)
-                    all_accs.append(acc)
+                # Fine-tune on train task
+                for j in range(FT_EPOCHS):
+                    acc, loss_value = fit(model, criterion, optimizer, epoch, support_vecs, support_labels, query_vecs,
+                                          query_labels)
+                    print(f"{j}: ACC: {acc}\tLOSS: {loss_value}")
+                    if j == TRAIN_EPOCHS - 1:
+                        all_loss.append(loss_value)
+                        all_accs.append(acc)
 
-            try:
-                print(f"\nMEAN ACC: {mean(all_accs)}\t ,MEAN LOSS: {mean(all_loss)}")
-            except:
-                print("NO training")
+                try:
+                    print(f"\nMEAN ACC: {mean(all_accs)}\t ,MEAN LOSS: {mean(all_loss)}")
+                except:
+                    print("NO training")
     return model
 
 
@@ -386,7 +387,6 @@ def eval_process(model):
 
         # Create support set
         for _, data in enumerate(s_test_loader):
-
             features = [d for d in data['features']]
             support_vecs = torch.stack(features).to(device)
             support_labels = torch.tensor([d for d in data['label']]).to(device)
