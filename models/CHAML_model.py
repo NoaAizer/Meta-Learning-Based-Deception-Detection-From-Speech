@@ -41,12 +41,6 @@ config = tf.compat.v1.ConfigProto()
 config.gpu_options.allow_growth = True
 sess = tf.compat.v1.Session(config=config)
 
-# Write results to file
-np.set_printoptions(threshold=sys.maxsize)
-pd.set_option("display.max_rows", None, "display.max_columns", None)
-f = open("../output_CHAML.txt", 'w')
-sys.stdout = f
-
 # Define Batch-size and epochs
 TRAIN_BATCH_SIZE = 256
 EPOCHS = 50
@@ -55,8 +49,9 @@ EPOCHS = 50
 WAV2VEC = False
 
 root_path = "../"
+
 train_path = root_path + "train_CHAML.csv"
-test_path = root_path + "test_df.csv"
+test_path = root_path + "test_CHAML.csv"
 
 ACCS = []
 RECALLS = []
@@ -67,10 +62,19 @@ if WAV2VEC:
     INPUT_SIZE = 1024
     vecs_dir = "../wav2vec_vecs"
     saved_loaded_vecs_dir = "../wav2vec_dfs_vecs"
+    file_suffix = "wav2vec"
+
 else:
     INPUT_SIZE = 193
     vecs_dir = "../fsfm_dir"
     saved_loaded_vecs_dir = "../fsfm_dfs_vecs"
+    file_suffix = "five_fe"
+
+# Write results to file
+np.set_printoptions(threshold=sys.maxsize)
+pd.set_option("display.max_rows", None, "display.max_columns", None)
+f = open(f"../outputs/output_CHAML_{file_suffix}.txt", 'w')
+sys.stdout = f
 
 
 # Five-Features
