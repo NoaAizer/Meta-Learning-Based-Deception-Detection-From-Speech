@@ -46,17 +46,22 @@ TRAIN_BATCH_SIZE = 256
 EPOCHS = 50
 
 # If Wav2Vec 2.0 embedding, otherwise five-sound-features
-WAV2VEC = False
+WAV2VEC = True
 
 root_path = "../"
-
 train_path = root_path + "train_CHAML.csv"
-test_path = root_path + "test_CHAML.csv"
+test_path = root_path + "test_df.csv"
+test_path = "C:\\Users\\noaai\\Desktop\\new_claims\\all_good_folders\\meta_learning\\test_df.csv"
 
-ACCS = []
-RECALLS = []
-PRECISIONS = []
-F1S = []
+
+
+all_labels = []
+all_preds = []
+
+ALL_ACCS = []
+ALL_RECALLS = []
+ALL_PRECISIONS = []
+ALL_F1S = []
 
 if WAV2VEC:
     INPUT_SIZE = 1024
@@ -137,7 +142,7 @@ def CHAML_model():
     model = Model(inputs=[query, t1, t2, f1, f2], outputs=output)
     print(model.summary())
     # plot graph
-    plot_model(model, to_file='../CHAML_model.png', show_shapes=True, show_layer_names=True,
+    plot_model(model, to_file='../outputs/CHAML_model.png', show_shapes=True, show_layer_names=True,
                show_layer_activations=True)
 
     # Specify the optimizer, and compile the model with loss functions for both outputs
@@ -284,6 +289,40 @@ def train_CHAML(train_df, test_df):
     # Prediction on test set
     prediction(test_df, model)
 
+def print_scores(test_labels, test_preds):
+    """
+    Print all current scores, for current SEED and the mean of all previous ones.
+    :param test_labels: labels of all query sets of test tasks
+    :param test_preds: predicted labels of all query sets of test tasks
+    :return:
+    """
+    # Print all tasks scores
+    accuracy_all_tasks = accuracy_score(test_labels, test_preds)
+    precision_all_tasks = precision_score(test_labels, test_preds)
+    recall_all_tasks = recall_score(test_labels, test_preds)
+    f1_all_tasks = f1_score(test_labels, test_preds)
+
+    print(f"\n\n############################## SEED {SEED} SCORES: ###############################")
+
+    print(confusion_matrix(test_labels, test_preds))
+    print(f"Mean Accuracy: {accuracy_all_tasks}")
+    print(f"Mean Precision: {precision_all_tasks}")
+    print(f"Mean Recall: {recall_all_tasks}")
+    print(f"Mean F1-score: {f1_all_tasks}")
+
+    ALL_ACCS.append(accuracy_all_tasks)
+    ALL_PRECISIONS.append(precision_all_tasks)
+    ALL_RECALLS.append(recall_all_tasks)
+    ALL_F1S.append(f1_all_tasks)
+
+    print(f" ##############################  MEAN SCORES OF ALL CURRENT SEEDS: ###############################")
+
+    print(confusion_matrix(all_labels, all_preds))
+    print(f"Current Mean Accuracy: {mean(ALL_ACCS)}")
+    print(f"Current Mean Precision: {mean(ALL_PRECISIONS)}")
+    print(f"Current Mean Recall: {mean(ALL_RECALLS)}")
+    print(f"Current Mean F1-score: {mean(ALL_F1S)}")
+
 
 def prediction(test_df, model):
     """
@@ -297,10 +336,10 @@ def prediction(test_df, model):
     test_df = preprocess_df(test_df)
     test_df = test_df.groupby("task")
 
-    all_labels = []
-    all_preds = []
-    all_fours = []
-    all_fours_preds = []
+    test_labels = []
+    test_preds = []
+    test_fours = []
+    test_fours_preds = []
 
     # For each task:
     for name, group in test_df:
@@ -354,28 +393,16 @@ def prediction(test_df, model):
         print('Recall:', recall_score(labels, y_pred))
         print('F1-Score:', f1_score(labels, y_pred))
 
+        test_labels.extend(labels)
+        test_preds.extend(y_pred)
+
         all_labels.extend(labels)
         all_preds.extend(y_pred)
 
-    # Print statistics for all test tasks
-    print("LABELS:", all_labels)
-    print("PREDS:", all_preds)
-    print(confusion_matrix(all_labels, all_preds))
-    print("Accuracy:", accuracy_score(all_labels, all_preds))
-    print('Precision:', precision_score(all_labels, all_preds))
-    print('Recall:', recall_score(all_labels, all_preds))
-    print('F1-Score:', f1_score(all_labels, all_preds))
 
-    # Save list with all current executions statistics
-    scores = {'acc': accuracy_score(all_labels, all_preds), 'recall': recall_score(all_labels, all_preds),
-              'precision': precision_score(all_labels, all_preds), 'f1': f1_score(all_labels, all_preds, pos_label=1),
-              'output2': accuracy_score(all_fours, all_fours_preds)}
-    ACCS.append(scores['acc'])
-    RECALLS.append(scores['recall'])
-    PRECISIONS.append(scores['precision'])
-    F1S.append(scores['f1'])
+    print_scores(test_labels, test_preds)
 
-    return scores
+
 
 
 if __name__ == "__main__":
@@ -406,17 +433,16 @@ if __name__ == "__main__":
         keras.backend.clear_session()
         gc.collect()
 
-        print(f"Current Mean Accuracy:{mean(ACCS)}")
-        print(f"Current Mean Precisions:{mean(PRECISIONS)}")
-        print(f"Current Mean Recall:{mean(RECALLS)}")
-        print(f"Current Mean F1s:{mean(F1S)}")
-    print(ACCS)
-    print(F1S)
-    print(f"Mean Accuracy:{mean(ACCS)}")
-    print(f"Mean Precisions:{mean(PRECISIONS)}")
-    print(f"Mean Recall:{mean(RECALLS)}")
-    print(f"Mean F1s:{mean(F1S)}")
 
+
+    print("***************************** Final Scores *****************************")
+
+    print(ALL_ACCS)
+    print(ALL_F1S)
+    print(f"Mean Accuracy:{mean(ALL_ACCS)}")
+    print(f"Mean Precisions:{mean(ALL_PRECISIONS)}")
+    print(f"Mean Recall:{mean(ALL_RECALLS)}")
+    print(f"Mean F1s:{mean(ALL_F1S)}")
     # Calculating average running time of all 30 executions
     avgTime = pd.to_datetime(pd.Series(times).values.astype('datetime64[D]')).mean()
     print(f"Mean Time:{avgTime}")
