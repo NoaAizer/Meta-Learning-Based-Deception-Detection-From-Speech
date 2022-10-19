@@ -65,7 +65,7 @@ else:
     file_suffix = "five_fe"
 
 # Write results to file
-f = open(f"../outputs/output_prototypical_{file_suffix}.txt", 'w')
+f = open(f"../outputs/output_prototypical_f_{file_suffix}.txt", 'w')
 
 sys.stdout = f
 
