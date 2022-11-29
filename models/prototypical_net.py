@@ -26,7 +26,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from torch import nn, cuda, relu
+from torch import nn, cuda, relu, optim
 from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader
 
@@ -39,8 +39,7 @@ root_path = "../"
 train_path = root_path + "train_df.csv"
 test_path = root_path + "test_df.csv"
 
-# Define Batch-size and epochs
-TRAIN_BATCH_SIZE = 256
+# Define epochs
 TRAIN_EPOCHS = 1
 FT_EPOCHS = 50
 
@@ -65,7 +64,7 @@ else:
     file_suffix = "five_fe"
 
 # Write results to file
-f = open(f"../outputs/output_prototypical_f_{file_suffix}.txt", 'w')
+f = open(f"../outputs/output_prototypical_{file_suffix}.txt", 'w')
 
 sys.stdout = f
 
@@ -194,17 +193,15 @@ def evaluate_on_one_task(
     return query_preds.tolist()
 
 
-def fit(
+def train_step(
         model_f,
-        loss_f,
-        opt,
         ep: int,
         support_images: torch.Tensor,
         support_labels: torch.Tensor,
         query_images: torch.Tensor,
         query_labels: torch.Tensor,
 ):
-    opt.zero_grad()
+    optimizer.zero_grad()
     classification_scores = model_f(
         support_images.to(device), support_labels.to(device), query_images.to(device)
     )
@@ -221,11 +218,11 @@ def fit(
         except:
             print(confusion_matrix(labels, preds))
 
-    loss = loss_f(classification_scores, query_labels.to(device))
+    loss = criterion(classification_scores, query_labels.to(device))
     loss.backward()
-    opt.step()
+    optimizer.step()
 
-    return acc, loss.item()
+    return acc, loss.item(), model_f
 
 
 def init_loss_and_opt(model_w, weighted=True):
@@ -244,17 +241,17 @@ def init_loss_and_opt(model_w, weighted=True):
     else:
         loss_function = CrossEntropyLoss()
 
-    optimizer = torch.optim.Adam(params=model_w.parameters())
+    # epsilon definition for being the same as in Keras default values
+    optimizer = optim.Adam(model_w.parameters(),eps=1e-07)
 
     return loss_function, optimizer
 
 
-def train_process(model, criterion, optimizer):
+def train_process(model):
     """
     Train prototypical model on train tasks
     :param model: prototypical model
-    :param criterion: loss function
-    :param optimizer: ADAM optimizer
+
     :return: trained model
     """
 
@@ -280,10 +277,13 @@ def train_process(model, criterion, optimizer):
 
             s_tr_params = {'batch_size': len(support_tr_set),
                            'shuffle': True,
-                           'num_workers': 0
                            }
+            q_tr_params = {'batch_size': len(query_tr_set),
+                           'shuffle': True,
+                           }
+
             s_train_loader = DataLoader(support_tr_set, **s_tr_params)
-            q_train_loader = DataLoader(query_tr_set, batch_size=TRAIN_BATCH_SIZE, shuffle=True)
+            q_train_loader = DataLoader(query_tr_set, **q_tr_params)
 
             for _, data in enumerate(s_train_loader):
                 features = [d for d in data['features']]
@@ -295,19 +295,19 @@ def train_process(model, criterion, optimizer):
                 query_vecs = torch.stack(features).to(device)
                 query_labels = torch.tensor([d for d in data['label']]).to(device)
 
-                # Fine-tune on train task
-                for j in range(FT_EPOCHS):
-                    acc, loss_value = fit(model, criterion, optimizer, epoch, support_vecs, support_labels, query_vecs,
-                                          query_labels)
-                    print(f"{j}: ACC: {acc}\tLOSS: {loss_value}")
-                    if j == TRAIN_EPOCHS - 1:
-                        all_loss.append(loss_value)
-                        all_accs.append(acc)
+            # Fine-tune on train task
+            for j in range(FT_EPOCHS):
+                acc, loss_value, model = train_step(model,epoch, support_vecs, support_labels, query_vecs,
+                                      query_labels)
+                print(f"{j}: ACC: {acc}\tLOSS: {loss_value}")
+                if j == FT_EPOCHS - 1:
+                    all_loss.append(loss_value)
+                    all_accs.append(acc)
 
-                try:
-                    print(f"\nMEAN ACC: {mean(all_accs)}\t ,MEAN LOSS: {mean(all_loss)}")
-                except:
-                    print("NO training")
+        try:
+            print(f"\nMEAN ACC: {mean(all_accs)}\t ,MEAN LOSS: {mean(all_loss)}")
+        except:
+            print("NO training")
     return model
 
 
@@ -369,16 +369,16 @@ def eval_process(model):
         support_ts_set = Sample(group[group['set'] == 'support'])
         query_ts_set = Sample(group[group['set'] == 'query'])
 
-        s_tr_params = {'batch_size': len(support_ts_set),
+        s_ts_params = {'batch_size': len(support_ts_set),
                        'shuffle': True,
                        'num_workers': 0
                        }
-        q_tr_params = {'batch_size': len(query_ts_set),
+        q_ts_params = {'batch_size': len(query_ts_set),
                        'shuffle': True,
                        'num_workers': 0
                        }
-        s_test_loader = DataLoader(support_ts_set, **s_tr_params, )
-        q_test_loader = DataLoader(query_ts_set, **q_tr_params, )
+        s_test_loader = DataLoader(support_ts_set, **s_ts_params, )
+        q_test_loader = DataLoader(query_ts_set, **q_ts_params, )
 
         # Create support set
         for _, data in enumerate(s_test_loader):
@@ -418,9 +418,10 @@ def main():
     embedding_network = embedding_net().to(device)
     print(embedding_network)
     model = PrototypicalNetworks(embedding_network).to(device)
-    criterion, optimizer = init_loss_and_opt(model)
+    global criterion, optimizer
+    criterion, optimizer = init_loss_and_opt(model,weighted=True)
 
-    trained_model = train_process(model, criterion, optimizer)
+    trained_model = train_process(model)
     eval_process(trained_model)
 
 

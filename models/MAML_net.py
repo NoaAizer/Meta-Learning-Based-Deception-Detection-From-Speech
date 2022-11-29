@@ -18,9 +18,9 @@ Sources:
 https://towardsdatascience.com/advances-in-few-shot-learning-reproducing-results-in-pytorch-aba70dee541d
 https://github.com/oscarknagg/few-shot/blob/master/few_shot/maml.py
 """
-import copy
 import gc
 import os
+import random
 import sys
 
 from collections import OrderedDict
@@ -52,10 +52,10 @@ root_path = "../"
 train_path = root_path + "train_df.csv"
 test_path = root_path + "test_df.csv"
 
-# Define Batch-size and epochs
-TRAIN_BATCH_SIZE = 256
+# Define epochs
 TRAIN_EPOCHS = 50
-INNER_TRAIN_EPOCHS = 25
+INNER_TRAIN_EPOCHS = 15# 2
+LR = 0.001
 
 # If Wav2Vec 2.0 embedding, otherwise five-sound-features
 WAV2VEC = False
@@ -64,6 +64,8 @@ device = 'cuda' if cuda.is_available() else 'cpu'
 print(device)
 
 train_df = pd.read_csv(train_path, delimiter=',')
+amount_false = sum(train_df['label'])
+amount_true = len(train_df) - amount_false
 test_df = pd.read_csv(test_path, delimiter=',')
 
 if WAV2VEC:
@@ -95,7 +97,7 @@ def speech_file_to_array_fn(sample):
     :return: a tensor contains the embedding
     """
     x1_f = np.load(f'{vecs_dir}/{sample["file_name"]}.npy', allow_pickle=True)
-    return torch.FloatTensor(x1_f).to(device)
+    return torch.Tensor(x1_f).to(device)
 
 
 class Sample(Dataset):
@@ -141,6 +143,7 @@ class FSFM(nn.Module):
         self.do3 = nn.Dropout(0.5)
         self.layer4 = nn.Linear(128, 2)
 
+
     def replace_grad(parameter_gradients, parameter_name):
         """Creates a backward hook function that replaces the calculated gradient
         with a precomputed value when .backward() is called.
@@ -163,41 +166,39 @@ class FSFM(nn.Module):
         x = self.do2(x)
         x = F.relu(F.linear(x, weights['layer3.weight'], weights['layer3.bias']))
         x = self.do3(x)
-        x = torch.sigmoid(F.linear(x, weights['layer4.weight'], weights['layer4.bias']))
+        x = F.linear(x, weights['layer4.weight'], weights['layer4.bias'])
         return x
 
 
-def fine_tune_test_task(copy_model, loss_fn, support_vecs, support_labels):
+def fine_tune_test_task(model, loss_fn,support_vecs, support_labels):
     """
     Fine tune the copy model on the support set of the current test taskץ
-    :param copy_model: The primary trained model
+    :param model: The primary trained model
     :param loss_fn: Loss function to calculate between predictions and outputs
     :param support_vecs: Support set embedding vectors
     :param support_labels: Support set labels
-    :return: the fine tuned model
+    :return: weights of fine-tuned model
     """
-    copy_model.train()
+    # copy_model.train()
+    print("----------------------------- TRAIN -----------------------------")
     # Update the copy model of current task
-    temp_opt = optim.Adam(copy_model.parameters())
+    # Create a fast (copy) model using the current meta model weights
+    fast_weights = OrderedDict(model.named_parameters())
 
     for inner_batch in range(INNER_TRAIN_EPOCHS):
-        print("----------------------------- TRAIN -----------------------------")
-        # Create a fast (copy) model using the current meta model weights
-        fast_weights = OrderedDict(copy_model.named_parameters())
-        temp_opt.zero_grad()
-        logits = copy_model.functional_forward(support_vecs, fast_weights)
-
+        # Perform update of model weights
+        logits = model.functional_forward(support_vecs, fast_weights)
         loss = loss_fn(logits, support_labels)
-        preds = np.argmax((logits.cpu()).detach().numpy(), axis=1)
-        labels = support_labels.cpu().numpy()
-        acc = (preds == labels).astype(np.float32).mean().item()
-        print("LOSS:", loss.item())
-        print("ACC:", acc)
+        gradients = torch.autograd.grad(loss, fast_weights.values(), )
 
-        loss.backward()
-        temp_opt.step()
+        # Update weights manually
+        fast_weights = OrderedDict(
+            (name, param - LR * grad)
+            for ((name, param), grad) in zip(fast_weights.items(), gradients)
+        )
+        print(loss)
 
-        return copy_model
+    return fast_weights
 
 
 def print_scores(test_labels, test_preds):
@@ -235,7 +236,7 @@ def print_scores(test_labels, test_preds):
     print(f"Current Mean F1-score: {mean(ALL_F1S)}")
 
 
-def eval_testing_tasks(model, loss_fn):
+def eval_testing_tasks(model,loss_fn):
     """
     Evaluate MAML model on testing tasks.\n
     For each testing task:\n
@@ -258,22 +259,21 @@ def eval_testing_tasks(model, loss_fn):
     ts_df = test_df.groupby('task')
     for name, group in ts_df:
         print(f"*************************************** {name} ***************************************")
-        # # Copy the train model to fine tune on the specific task only
-        temp_model = copy.deepcopy(model).to(device)
 
         # Define support and query sets
         support_ts_set = Sample(group[group['set'] == 'support'])
         query_ts_set = Sample(group[group['set'] == 'query'])
 
-        s_tr_params = {'batch_size': len(support_ts_set),
+        s_ts_params = {'batch_size': len(support_ts_set),
                        'shuffle': True,
+
                        }
-        q_tr_params = {'batch_size': len(query_ts_set),
-                       'shuffle': True,
+        q_ts_params = {'batch_size': len(query_ts_set),
+                       'shuffle': False,
                        }
 
-        s_test_loader = DataLoader(support_ts_set, **s_tr_params)
-        q_test_loader = DataLoader(query_ts_set, **q_tr_params)
+        s_test_loader = DataLoader(support_ts_set, **s_ts_params)
+        q_test_loader = DataLoader(query_ts_set, **q_ts_params)
 
         for _, data in enumerate(s_test_loader):
             features = [d for d in data['features']]
@@ -285,38 +285,37 @@ def eval_testing_tasks(model, loss_fn):
             query_vecs = torch.stack(features).to(device)
             query_labels = torch.tensor([d for d in data['label']]).to(device)
 
-            # For each query set, fine-tune on support set for "inner_train_steps".
-            fine_tuned_model = fine_tune_test_task(copy_model=temp_model, loss_fn=loss_fn,
-                                                   support_vecs=support_vecs, support_labels=support_labels)
+        # For each query set, fine-tune on support set for "inner_train_steps".
+        ft_weights = fine_tune_test_task(model=model,loss_fn=loss_fn,
+                                         support_vecs=support_vecs, support_labels=support_labels)
 
-            print("----------------------------- VAL -----------------------------")
-            # eval mode affects the behaviour of some layers (such as batch normalization or dropout)
-            # no_grad() tells torch not to keep in memory the whole computational graph (it's more lightweight this way)
-            fine_tuned_model.eval()
-            with torch.no_grad():
-                fast_weights = OrderedDict(fine_tuned_model.named_parameters())
-                # Do a pass of the model on the validation data from the current task
-                logits = fine_tuned_model.functional_forward(query_vecs, fast_weights)
+        print("----------------------------- VAL -----------------------------")
+        # eval mode affects the behaviour of some layers (such as batch normalization or dropout)
+        # no_grad() tells torch not to keep in memory the whole computational graph (it's more lightweight this way)
+        model.eval()
+        with torch.no_grad():
+            # Do a pass of the model on the validation data from the current task
+            logits = model.functional_forward(query_vecs, ft_weights)
 
-                # Get post-update accuracies and f1-score
-                y_pred = logits.softmax(dim=1)
-                preds = np.argmax((y_pred.cpu()).detach().numpy(), axis=1)
-                labels = query_labels.cpu().numpy()
-                acc = (preds == labels).astype(np.float32).mean().item()
+            # Get post-update accuracies and f1-score
+            y_pred = logits.softmax(dim=1)
+            preds = np.argmax((y_pred.cpu()).detach().numpy(), axis=1)
+            labels = query_labels.cpu().numpy()
+            acc = (preds == labels).astype(np.float32).mean().item()
 
-                print(
-                    "Evaluation:\n"
-                    f"Accuracy: {acc}\n"
-                    f"F1-score:{f1_score(labels, preds, average=None)}\n")
-                print(confusion_matrix(labels, preds))
-                test_labels.extend(labels)
-                test_preds.extend(preds)
+            print(
+                "Evaluation:\n"
+                f"Accuracy: {acc}\n"
+                f"F1-score:{f1_score(labels, preds, pos_label=1, average=None)}\n")
+            print(confusion_matrix(labels, preds))
+            test_labels.extend(labels)
+            test_preds.extend(preds)
 
-                # Print evaluation results
-                try:
-                    print(classification_report(labels, preds, target_names=['0', '1']))
-                except:
-                    ""
+            # Print evaluation results
+            try:
+                print(classification_report(labels, preds, target_names=['0', '1']))
+            except:
+                ""
     print_scores(test_labels, test_preds)
 
 
@@ -326,7 +325,6 @@ def meta_gradient_step(model: Module,
                        order: int,
                        epochs: int,
                        inner_train_steps: int,
-                       inner_lr: float,
                        train: bool):
     """
     Perform a gradient step on a meta-learner.
@@ -339,7 +337,6 @@ def meta_gradient_step(model: Module,
             weights on the query with respect to the original weights).
         epochs: Number of iteration iterating over all training tasks.
         inner_train_steps: Number of gradient steps to fit the fast weights during each inner update
-        inner_lr: Learning rate used to update the fast weights on the inner update
         train: Whether to update the meta-learner weights at the end of the episode.
 
     """
@@ -373,7 +370,7 @@ def meta_gradient_step(model: Module,
             s_tr_params = {'batch_size': len(support_tr_set),
                            'shuffle': True,
                            }
-            q_tr_params = {'batch_size': TRAIN_BATCH_SIZE,
+            q_tr_params = {'batch_size': len(query_tr_set),
                            'shuffle': False,
                            }
             s_train_loader = DataLoader(support_tr_set, **s_tr_params)
@@ -386,6 +383,8 @@ def meta_gradient_step(model: Module,
             q_train_loader = DataLoader(query_tr_set, **q_tr_params,
                                         sampler=WeightedRandomSampler(weights, len(weights)))
 
+
+
             for _, data in enumerate(s_train_loader):
                 features = [d for d in data['features']]
                 support_vecs = torch.stack(features).to(device)
@@ -397,59 +396,58 @@ def meta_gradient_step(model: Module,
                 query_vecs = torch.stack(features).to(device)
                 query_labels = torch.tensor([d for d in data['label']]).to(device)
 
-                # Train the model for `inner_train_steps` iterations
-                for inner_batch in range(inner_train_steps):
-                    # print(f"------------------------- inner train epoch {inner_batch+1}:-------------------------")
+            # Train the model for `inner_train_steps` iterations
+            for inner_batch in range(inner_train_steps):
+                # print(f"------------------------- inner train epoch {inner_batch+1}:-------------------------")
 
-                    # Perform update of model weights
-                    logits = model.functional_forward(support_vecs, fast_weights)
-                    loss = loss_fn(logits, support_labels)
-                    gradients = torch.autograd.grad(loss, fast_weights.values(), create_graph=create_graph)
+                # Perform update of model weights
+                logits = model.functional_forward(support_vecs, fast_weights)
+                loss = loss_fn(logits, support_labels)
+                gradients = torch.autograd.grad(loss, fast_weights.values(), create_graph=create_graph)
 
-                    preds = np.argmax((logits.cpu()).detach().numpy(), axis=1)
-                    labels = support_labels.cpu().numpy()
-                    acc = (preds == labels).astype(np.float32).mean().item()
+                preds = np.argmax((logits.cpu()).detach().numpy(), axis=1)
+                labels = support_labels.cpu().numpy()
+                acc = (preds == labels).astype(np.float32).mean().item()
 
-                    # Update weights manually
-                    fast_weights = OrderedDict(
-                        (name, param - inner_lr * grad)
-                        for ((name, param), grad) in zip(fast_weights.items(), gradients)
-                    )
+                # Update weights manually
+                fast_weights = OrderedDict(
+                    (name, param - LR * grad)
+                    for ((name, param), grad) in zip(fast_weights.items(), gradients)
+                )
 
-                    # print("----------------------------- VAL -----------------------------")
+                # print("----------------------------- VAL -----------------------------")
 
-                    # Do a pass of the model on the validation data from the current task
-                    logits = model.functional_forward(query_vecs, fast_weights)
-                    loss = loss_fn(logits, query_labels)
-                    loss.backward(retain_graph=True)
+            # Do a pass of the model on the validation data from the current task
+            logits = model.functional_forward(query_vecs, fast_weights)
+            loss = loss_fn(logits, query_labels)
+            loss.backward(retain_graph=True)
 
-                    # Get post-update accuracies
-                    y_pred = logits.softmax(dim=1)
-                    task_predictions.append(y_pred)
+            # Get post-update accuracies
+            y_pred = logits.softmax(dim=1)
+            task_predictions.append(y_pred)
 
-                    preds = np.argmax((y_pred.cpu()).detach().numpy(), axis=1)
-                    labels = query_labels.cpu().numpy()
+            preds = np.argmax((y_pred.cpu()).detach().numpy(), axis=1)
+            labels = query_labels.cpu().numpy()
 
-                    acc = (preds == labels).astype(np.float32).mean().item()
-                    accs.append(acc)
+            acc = (preds == labels).astype(np.float32).mean().item()
+            accs.append(acc)
 
-                    f1 = f1_score(labels, preds, average=None)
-                    f_s.append(f1[-1])
+            f1 = f1_score(labels, preds, average=None)
+            f_s.append(f1[-1])
 
-                    if inner_batch == inner_train_steps - 1:
-                        # Print classification report for current task query set
-                        try:
-                            print("ACC:", acc)
-                            print("LOSS:", loss.item())
-                            print(classification_report(labels, preds, target_names=['0', '1']))
-                        except:
-                            ""
+            # Print classification report for current task query set
+            try:
+                print("ACC:", acc)
+                print("LOSS:", loss.item())
+                print(classification_report(labels, preds, target_names=['0', '1']))
+            except:
+                ""
 
-                    # Accumulate losses and gradients
-                    task_losses.append(loss)
-                    gradients = torch.autograd.grad(loss, fast_weights.values(), create_graph=create_graph)
-                    named_grads = {name: g for ((name, _), g) in zip(fast_weights.items(), gradients)}
-                    task_gradients.append(named_grads)
+            # Accumulate losses and gradients
+            task_losses.append(loss)
+            gradients = torch.autograd.grad(loss, fast_weights.values(), create_graph=create_graph)
+            named_grads = {name: g for ((name, _), g) in zip(fast_weights.items(), gradients)}
+            task_gradients.append(named_grads)
 
         if order == 1:
             if train:
@@ -463,10 +461,6 @@ def meta_gradient_step(model: Module,
 
                 model.train()
                 optimiser.zero_grad()
-                # Dummy pass in order to create `loss` variable
-                # Replace dummy gradients with mean task gradients using hooks
-                # logits = model(torch.zeros((k_way,) + data_shape).to(device, dtype=torch.double))
-                # loss = loss_fn(logits, create_nshot_task_label(k_way, 1).to(device))
                 loss.backward()
                 optimiser.step()
 
@@ -489,9 +483,8 @@ def meta_gradient_step(model: Module,
             avg_f = fmean(f_s)
             print(f"TRAIN QUERIES EPOCH {i}: \nLOSS:{loss.item()} \nACC: {avg_acc} \nF1: {avg_f}\n")
 
-            # Evaluate on testing task only after the last train epoch
-            if i == epochs - 1:
-                eval_testing_tasks(model=model, loss_fn=loss_fn)
+    # Evaluate on testing task only after the last train epoch
+    eval_testing_tasks(model=model, loss_fn=loss_fn)
 
 
 def main():
@@ -499,26 +492,30 @@ def main():
     model = FSFM().to(device)
 
     # Define loss and optimizer
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters())
+    criterion = nn.CrossEntropyLoss().to(device)
+
+    # epsilon definition for being the same as in Keras default values
+    optimizer = optim.Adam(model.parameters(),eps=1e-07)
 
     # Execution
     meta_gradient_step(model=model, optimiser=optimizer, loss_fn=criterion,
-                       order=2, epochs=TRAIN_EPOCHS, inner_train_steps=INNER_TRAIN_EPOCHS, inner_lr=0.001, train=True)
+                       order=2, epochs=TRAIN_EPOCHS, inner_train_steps=INNER_TRAIN_EPOCHS,train=True)
 
 
 if __name__ == '__main__':
 
     times = []
-    for i in range(0, 30):
+    for i in range(10, 30):
         print(i)
         SEED = i
 
         # Define seed for all libraries
         os.environ['PYTHONHASHSEED'] = str(SEED)
-        torch.backends.cudnn.enabled = True
         torch.manual_seed(SEED)
         np.random.seed(SEED)
+        random.seed(SEED)
+
+        torch.cuda.empty_cache()
 
         start = datetime.now()
         main()

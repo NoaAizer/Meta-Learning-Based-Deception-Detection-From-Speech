@@ -18,7 +18,7 @@ from keras.models import Sequential
 
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import confusion_matrix, accuracy_score, recall_score, precision_score, f1_score
-from sklearn.utils import compute_sample_weight, class_weight
+from sklearn.utils import compute_sample_weight
 
 from statistics import mean
 
@@ -32,11 +32,11 @@ config.gpu_options.allow_growth = True
 sess = tf.compat.v1.Session(config=config)
 
 # Define Batch-size and epochs
-BATCH_SIZE = 256
+BATCH_SIZE = 512
 EPOCHS = 50
 
 # If Wav2Vec 2.0 embedding, otherwise five-sound-features
-WAV2VEC = True
+WAV2VEC = False
 
 all_labels = []
 all_preds = []
@@ -64,7 +64,7 @@ else:
 # Write results to file
 np.set_printoptions(threshold=sys.maxsize)
 pd.set_option("display.max_rows", None, "display.max_columns", None)
-f = open(f"../outputs/output_FSFM_{file_suffix}.txt", 'w')
+f = open(f"../outputs/output_FSFM_{file_suffix}_1000.txt", 'w')
 sys.stdout = f
 
 
@@ -208,12 +208,6 @@ def trainFSFM(df_train, df_test):
 
     # Weighted loss
     s_weights = compute_sample_weight(class_weight='balanced', y=df_train.label)
-    # Weighted loss
-    weights = class_weight.compute_class_weight(class_weight='balanced',
-                                                classes=np.unique(df_train.label),
-                                                y=df_train.label)
-    weights = {i: weights[i] for i in range(len(np.unique(df_train.label)))}
-    print(weights)
 
     # Train model
     print(len(X_train),len(y_train))
@@ -244,9 +238,6 @@ if __name__ == "__main__":
         df_test = pd.read_csv(test_path)
 
         trainFSFM(df_train, df_test)
-
-        # tf.keras.backend.clear_session()
-        # gc.collect()
 
     print("***************************** Final Scores *****************************")
 

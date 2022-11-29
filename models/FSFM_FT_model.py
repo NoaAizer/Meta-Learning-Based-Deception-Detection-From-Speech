@@ -35,7 +35,7 @@ config.gpu_options.allow_growth = True
 sess = tf.compat.v1.Session(config=config)
 
 # Define Batch-size and epochs
-BATCH_SIZE = 256
+BATCH_SIZE = 512
 EPOCHS = 50
 FT_EPOCHS = 50
 

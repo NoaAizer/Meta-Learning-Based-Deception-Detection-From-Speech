@@ -29,7 +29,7 @@ from keras.layers import Dense, Dropout, concatenate, multiply
 
 from sklearn.metrics import confusion_matrix, accuracy_score, recall_score, precision_score, \
     f1_score
-from sklearn.utils import compute_sample_weight
+from sklearn.utils import class_weight
 from sklearn.preprocessing import LabelEncoder
 
 # Use GPU and define setting for getting reproducible results
@@ -42,7 +42,7 @@ config.gpu_options.allow_growth = True
 sess = tf.compat.v1.Session(config=config)
 
 # Define Batch-size and epochs
-TRAIN_BATCH_SIZE = 256
+TRAIN_BATCH_SIZE = 512
 EPOCHS = 50
 
 # If Wav2Vec 2.0 embedding, otherwise five-sound-features
@@ -51,9 +51,6 @@ WAV2VEC = True
 root_path = "../"
 train_path = root_path + "train_CHAML.csv"
 test_path = root_path + "test_df.csv"
-test_path = "C:\\Users\\noaai\\Desktop\\new_claims\\all_good_folders\\meta_learning\\test_df.csv"
-
-
 
 all_labels = []
 all_preds = []
@@ -78,21 +75,8 @@ else:
 # Write results to file
 np.set_printoptions(threshold=sys.maxsize)
 pd.set_option("display.max_rows", None, "display.max_columns", None)
-f = open(f"../outputs/output_CHAML_{file_suffix}.txt", 'w')
+f = open(f"../outputs/output_CHAML_{file_suffix}1.txt", 'w')
 sys.stdout = f
-
-
-# Five-Features
-# Mean Accuracy:0.5674244884702826
-# Mean Precisions:0.3268771983833673
-# Mean Recall:0.48876146788990826
-# Mean F1s:0.38566649245270856
-
-# WAV2VEC
-# Mean Accuracy:0.6093536862617733
-# Mean Precisions:0.35085231702087605
-# Mean Recall:0.444151376146789
-# Mean F1s:0.3904127471394492
 
 
 def CHAML_model():
@@ -105,11 +89,12 @@ def CHAML_model():
     f2 = Input(shape=(INPUT_SIZE,))
 
     # CHAML- core
-    D1 = Dense(INPUT_SIZE * 3, activation='relu', )
+
+    D1 = Dense(INPUT_SIZE * 3, activation='relu')
     DO1 = Dropout(0.2)
     D2 = Dense(INPUT_SIZE * 2, activation='relu')
     DO2 = Dropout(0.2)
-    D3 = Dense(INPUT_SIZE * 2, activation='relu', )
+    D3 = Dense(INPUT_SIZE * 2, activation='relu')
 
     # TRUE - preprocess
     T_mul = multiply([t1, t2])
@@ -147,34 +132,11 @@ def CHAML_model():
 
     # Specify the optimizer, and compile the model with loss functions for both outputs
     opt = tf.keras.optimizers.Adam()
+
     model.compile(loss='categorical_crossentropy', optimizer=opt,
                   metrics=['accuracy'])
 
     return model
-
-
-def preprocess_df(df):
-    for col in df.columns:
-        try:
-            temp = []
-            if col == 'label':
-                type_num = int
-            else:
-                type_num = float
-            for row in df.iterrows():
-                # Convert the vector to list (from string representation)
-                row[1][col] = row[1][col].replace('\n', '')
-                row[1][col] = row[1][col].replace('\r', '')
-                row[1][col] = row[1][col].replace('(array', '')
-                row[1][col] = row[1][col].replace(')', '')
-                row[1][col] = row[1][col].replace('[', '')
-                row[1][col] = row[1][col].replace(']', '')
-                row[1][col] = row[1][col].replace(',', '')
-                temp.append(np.array(row[1][col].split(), dtype=type_num))
-            df[col] = temp
-        except:
-            continue
-    return df
 
 
 def read_train_data(samples_df, num=0):
@@ -184,8 +146,11 @@ def read_train_data(samples_df, num=0):
     for each execution- only at the first execution time.
     :return:
     """
-
-    df_train = pd.read_csv(train_path)
+    df_train = pd.read_csv(root_path + "train_df.csv")
+    try:
+        os.mkdir(saved_loaded_vecs_dir)
+    except:
+        ""
 
     x_1 = []
     y_1 = []
@@ -254,8 +219,6 @@ def train_CHAML(train_df, test_df):
     model = CHAML_model()
     model.reset_states()
 
-    samples_df = preprocess_df(train_df)
-
     # Load embedding vectors for query and support set.
     try:
         # Query embedding and label
@@ -265,10 +228,14 @@ def train_CHAML(train_df, test_df):
         X4_tr = np.load(f'{saved_loaded_vecs_dir}/x_4_{SEED}_{SEED}.npy', allow_pickle=True)
 
     except:
-        X1_tr, y_tr, X4_tr = read_train_data(samples_df, SEED)
+        X1_tr, y_tr, X4_tr = read_train_data(train_df, SEED)
 
-    # Weighted Loss
-    s_weights = compute_sample_weight(class_weight='balanced', y=y_tr)
+    # Weighted loss
+    weights = class_weight.compute_class_weight(class_weight='balanced',
+                                                classes=np.unique(y_tr),
+                                                y=y_tr)
+    weights = {i: weights[i] for i in range(len(np.unique(y_tr)))}
+    print(weights)
 
     lb = LabelEncoder()
     y_tr = to_categorical(lb.fit_transform(y_tr))
@@ -284,10 +251,11 @@ def train_CHAML(train_df, test_df):
 
     model.fit([X1_tr, f1, f2, f3, f4], y_tr,
               batch_size=TRAIN_BATCH_SIZE,
-              epochs=EPOCHS, sample_weight=s_weights)
+              epochs=EPOCHS, class_weight=weights)
 
     # Prediction on test set
     prediction(test_df, model)
+
 
 def print_scores(test_labels, test_preds):
     """
@@ -333,32 +301,28 @@ def prediction(test_df, model):
     :return: prediction scores
     """
     print("#################################### TEST TASKS ####################################")
-    test_df = preprocess_df(test_df)
+    # test_df = preprocess_df(test_df)
     test_df = test_df.groupby("task")
 
     test_labels = []
     test_preds = []
-    test_fours = []
-    test_fours_preds = []
 
     # For each task:
     for name, group in test_df:
         print(f"----------------------------------------------{name}----------------------------------------------")
         # Order the support set as (True, True, False, False)
         support_ts_set = group[group['set'] == 'support'].sort_values('label')
-        print(support_ts_set)
 
         # mixed once to all
         # support_ts_set = group[group['set'] == 'support'].sample(frac=1, random_state=SEED).reset_index(drop=True)
 
-        # opposite support set to all
-        # support_ts_set = group[group['set'] == 'support'].sort_values('label', ascending=False)
+        x_2, y_2 = read_test_data(support_ts_set.copy())
+        x_2 = np.asarray(x_2).reshape([1, INPUT_SIZE * 4])
+        print(support_ts_set)
 
         # Load query set
         query_ts_set = group[group['set'] == 'query'].sample(frac=1, random_state=SEED).reset_index(drop=True)
         amount_of_qr_samples = len(query_ts_set)
-        x_2, y_2 = read_test_data(support_ts_set.copy())
-        x_2 = np.asarray(x_2).reshape([1, INPUT_SIZE * 4])
 
         # Add to each query sample, the support set of the current task
         df_preds = pd.DataFrame(columns=['1_features', '1_label', '4_features', '4_label'])
@@ -399,10 +363,7 @@ def prediction(test_df, model):
         all_labels.extend(labels)
         all_preds.extend(y_pred)
 
-
     print_scores(test_labels, test_preds)
-
-
 
 
 if __name__ == "__main__":
@@ -432,8 +393,6 @@ if __name__ == "__main__":
 
         keras.backend.clear_session()
         gc.collect()
-
-
 
     print("***************************** Final Scores *****************************")
 
