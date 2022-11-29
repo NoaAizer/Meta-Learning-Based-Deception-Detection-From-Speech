@@ -46,7 +46,7 @@ TRAIN_BATCH_SIZE = 512
 EPOCHS = 50
 
 # If Wav2Vec 2.0 embedding, otherwise five-sound-features
-WAV2VEC = True
+WAV2VEC = False
 
 root_path = "../"
 train_path = root_path + "train_CHAML.csv"
@@ -75,7 +75,7 @@ else:
 # Write results to file
 np.set_printoptions(threshold=sys.maxsize)
 pd.set_option("display.max_rows", None, "display.max_columns", None)
-f = open(f"../outputs/output_CHAML_{file_suffix}1.txt", 'w')
+f = open(f"../outputs/output_CHAML_{file_suffix}.txt", 'w')
 sys.stdout = f
 
 
