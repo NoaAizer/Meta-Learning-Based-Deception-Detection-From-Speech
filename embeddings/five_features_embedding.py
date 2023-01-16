@@ -35,7 +35,7 @@ train_path = root_path + "train_df.csv"
 test_path = root_path + "test_df.csv"
 
 # Define the directory for the saves files
-vecs_dir = "../fsfm_dir"
+vecs_dir = "../fsfm_dir2_here"
 
 
 def extract_features(files):
@@ -44,7 +44,12 @@ def extract_features(files):
     :param files: audio samples.
     :return: five audio features.
     """
-    file_name = os.path.join(str(files.path))
+
+    file_name = files.path.replace("C:\\Users\\noaai\\Desktop\\new_claims\\all_good_folders\\meta_learning\\",
+                        "..\\data\\train_test_division\\")
+    file_name = os.path.join(str(file_name))
+
+    # file_name = os.path.join(str(files.path))
 
     # Loads the audio file as a floating point time series and assigns the default sample rate
     # Sample rate is set to 22050 by default
@@ -73,8 +78,8 @@ def extract_features(files):
                                                   sr=sample_rate).T, axis=0)
     except:
         print(file_name)
-
-    return mfccs, chroma, mel, contrast, tonnetz
+    print(files.file_name)
+    return mfccs, chroma, mel, contrast, tonnetz, files.file_name
 
 
 def create_embedding(df):
@@ -83,6 +88,7 @@ def create_embedding(df):
     :param df: data frame of train/test.
     :return: the embedding.
     """
+
     features_label = df.apply(extract_features, axis=1)
     file_name = "features"
     # Saving the numpy array because it takes a long time to extract the features
@@ -93,31 +99,43 @@ def create_embedding(df):
     # We create an empty list where we will concatenate all the features into one long feature
     # for each file to feed into our neural network
     features = []
+    names = []
     for i in range(0, len(features_label)):
         try:
             features.append(np.concatenate((features_label[i][0], features_label[i][1],
                                             features_label[i][2], features_label[i][3],
                                             features_label[i][4]), axis=0))
+            names.append(features_label[i][5])
         except:
+
             print("feature ", i, "didnt work")
 
     # Setting our X as a numpy array to feed into the neural network
     X = np.array(features)
 
-    return X
+    return X, names
 
 
-def preprocess_df(set):
+def preprocess_df():
     """
     Call the extraction function, rescale the embeddings for the given set and save all to files.
-    :param train: train data-frame.
-    :param test: test data-frame.
-    :return:
     """
+
+    train_set = df_train.copy()
+    test_set = df_test.copy()
     ss = StandardScaler()
 
-    X = create_embedding(set)
+    # Train Set
+    X,names = create_embedding(train_set)
     X = ss.fit_transform(X)
+    names = set["file_name"]
+
+    for x, name in zip(X, names):
+        np.save(f'{vecs_dir}/{name}.npy', x)
+
+    # Test Set
+    X,names = create_embedding(test_set)
+    X = ss.transform(X)
     names = set["file_name"]
 
     for x, name in zip(X, names):
@@ -131,5 +149,4 @@ if __name__ == "__main__":
     df_test = pd.read_csv(test_path)
 
     # Start embedding process
-    preprocess_df(df_train.copy())
-    preprocess_df(df_test.copy())
+    preprocess_df()
